@@ -22,6 +22,8 @@ Definition of Done Sprint 3:
 """
 
 import os
+import re
+from collections import defaultdict
 from typing import List, Dict, Any
 from dotenv import load_dotenv
 
@@ -38,6 +40,7 @@ LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
 
 # Guard tối thiểu để abstain ổn định hơn ở Sprint 2
 MIN_RELEVANCE_SCORE = float(os.getenv("MIN_RELEVANCE_SCORE", "0.20"))
+RRF_K = 60
 
 
 # =============================================================================
@@ -104,10 +107,55 @@ def retrieve_sparse(query: str, top_k: int = TOP_K_SEARCH) -> List[Dict[str, Any
     Mạnh ở: exact term, mã lỗi, tên riêng (ví dụ: "ERR-403", "P1", "refund")
     Hay hụt: câu hỏi paraphrase, đồng nghĩa
     """
-    # TODO Sprint 3: Implement BM25 search
-    print("[retrieve_sparse] Chưa implement — Sprint 3")
-    return []
+    import chromadb
+    from rank_bm25 import BM25Okapi
+    from index import CHROMA_DB_DIR
 
+    client = chromadb.PersistentClient(path=str(CHROMA_DB_DIR))
+    collection = client.get_collection("rag_lab")
+
+    results = collection.get(include=["documents", "metadatas"])
+    documents = results.get("documents", []) or []
+    metadatas = results.get("metadatas", []) or []
+
+    if not documents:
+        return []
+
+    def _tokenize(text: str) -> List[str]:
+        return re.findall(r"\w+", (text or "").lower(), flags=re.UNICODE)
+
+    tokenized_corpus = [_tokenize(doc) for doc in documents]
+    query_tokens = _tokenize(query)
+    if not query_tokens:
+        return []
+
+    bm25 = BM25Okapi(tokenized_corpus)
+    bm25_scores = bm25.get_scores(query_tokens).tolist()
+
+    # Chỉ giữ candidate có điểm > 0 để tránh đưa noise thuần túy vào context
+    ranked_indices = sorted(
+        range(len(bm25_scores)),
+        key=lambda i: bm25_scores[i],
+        reverse=True,
+    )
+
+    chunks: List[Dict[str, Any]] = []
+    for idx in ranked_indices:
+        raw_score = float(bm25_scores[idx])
+        if raw_score <= 0:
+            continue
+
+        chunks.append(
+            {
+                "text": documents[idx] or "",
+                "metadata": metadatas[idx] or {},
+                "score": raw_score,
+            }
+        )
+        if len(chunks) >= top_k:
+            break
+
+    return chunks
 
 # =============================================================================
 # RETRIEVAL — HYBRID (Dense + Sparse với Reciprocal Rank Fusion)
@@ -122,9 +170,54 @@ def retrieve_hybrid(
     """
     Hybrid retrieval: kết hợp dense và sparse bằng Reciprocal Rank Fusion (RRF).
     """
-    # TODO Sprint 3: Implement hybrid RRF
-    print("[retrieve_hybrid] Chưa implement RRF — fallback về dense")
-    return retrieve_dense(query, top_k)
+    dense_results = retrieve_dense(query, top_k=top_k)
+    sparse_results = retrieve_sparse(query, top_k=top_k)
+
+    if not dense_results and not sparse_results:
+        return []
+    if not sparse_results:
+        return dense_results
+    if not dense_results:
+        return sparse_results
+
+    def _chunk_key(chunk: Dict[str, Any]) -> str:
+        meta = chunk.get("metadata", {})
+        source = meta.get("source", "")
+        section = meta.get("section", "")
+        text = chunk.get("text", "")
+        return f"{source}|{section}|{text[:180]}"
+
+    fused = defaultdict(lambda: {"rrf": 0.0, "chunk": None, "dense_rank": None, "sparse_rank": None})
+
+    for rank, chunk in enumerate(dense_results, start=1):
+        key = _chunk_key(chunk)
+        fused[key]["rrf"] += dense_weight * (1.0 / (RRF_K + rank))
+        fused[key]["chunk"] = chunk
+        fused[key]["dense_rank"] = rank
+
+    for rank, chunk in enumerate(sparse_results, start=1):
+        key = _chunk_key(chunk)
+        fused[key]["rrf"] += sparse_weight * (1.0 / (RRF_K + rank))
+        if fused[key]["chunk"] is None:
+            fused[key]["chunk"] = chunk
+        fused[key]["sparse_rank"] = rank
+
+    merged: List[Dict[str, Any]] = []
+    for item in fused.values():
+        chunk = dict(item["chunk"] or {})
+        # Scale nhẹ để tương thích guard relevance hiện tại trong rag_answer()
+        fused_score = item["rrf"] * (RRF_K + 1)
+        chunk["score"] = fused_score
+        chunk["hybrid_debug"] = {
+            "dense_rank": item["dense_rank"],
+            "sparse_rank": item["sparse_rank"],
+            "fused_score": fused_score,
+        }
+        merged.append(chunk)
+
+    merged.sort(key=lambda x: x.get("score", 0.0), reverse=True)
+    return merged[:top_k]
+
 
 
 # =============================================================================
@@ -365,24 +458,39 @@ def compare_retrieval_strategies(query: str) -> None:
     print(f"Query: {query}")
     print('='*60)
 
-    strategies = ["dense", "hybrid"]  # Thêm "sparse" sau khi implement
+    strategies = ["dense", "hybrid", "sparse"]
+    rows: List[Dict[str, Any]] = []
 
     for strategy in strategies:
-        print(f"\n--- Strategy: {strategy} ---")
         try:
             result = rag_answer(query, retrieval_mode=strategy, verbose=False)
-            print(f"Answer: {result['answer']}")
-            print(f"Sources: {result['sources']}")
+            rows.append(
+                {
+                    "strategy": strategy,
+                    "answer": result["answer"],
+                    "sources": ", ".join(result["sources"][:2]) or "-",
+                    "top_score": (
+                        f"{result['chunks_used'][0].get('score', 0.0):.3f}"
+                        if result["chunks_used"] else "0.000"
+                    ),
+                }
+            )
         except NotImplementedError as e:
-            print(f"Chưa implement: {e}")
+            rows.append({"strategy": strategy, "answer": f"Chưa implement: {e}", "sources": "-", "top_score": "-"})
         except Exception as e:
-            print(f"Lỗi: {e}")
+            rows.append({"strategy": strategy, "answer": f"Lỗi: {e}", "sources": "-", "top_score": "-"})
+
+    print("\n| Strategy | Top score | Sources (top-2) | Answer |")
+    print("|---|---:|---|---|")
+    for row in rows:
+        safe_answer = str(row["answer"]).replace("\n", " ")
+        print(f"| {row['strategy']} | {row['top_score']} | {row['sources']} | {safe_answer} |")
+
 
 
 # =============================================================================
 # MAIN — Demo và Test
 # =============================================================================
-
 if __name__ == "__main__":
     print("=" * 60)
     print("Sprint 2 + 3: RAG Answer Pipeline")
@@ -406,6 +514,14 @@ if __name__ == "__main__":
             print("Chưa implement — hoàn thành TODO trong retrieve_dense() và call_llm() trước.")
         except Exception as e:
             print(f"Lỗi: {e}")
+
+    print("\n--- Sprint 3: Compare Baseline vs Variant ---")
+
+    for query in test_queries:
+        try:
+            compare_retrieval_strategies(query)
+        except Exception as e:
+            print(f"Lỗi khi so sánh strategy cho query '{query}': {e}")
 
     print("\n\nViệc cần làm Sprint 2:")
     print("  1. Implement retrieve_dense() — query ChromaDB")
