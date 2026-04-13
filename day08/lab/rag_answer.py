@@ -22,6 +22,8 @@ Definition of Done Sprint 3:
 """
 
 import os
+import re
+from collections import defaultdict
 from typing import List, Dict, Any
 from dotenv import load_dotenv
 
@@ -38,6 +40,7 @@ LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
 
 # Guard tối thiểu để abstain ổn định hơn ở Sprint 2
 MIN_RELEVANCE_SCORE = float(os.getenv("MIN_RELEVANCE_SCORE", "0.20"))
+RRF_K = 60
 
 
 # =============================================================================
@@ -104,10 +107,55 @@ def retrieve_sparse(query: str, top_k: int = TOP_K_SEARCH) -> List[Dict[str, Any
     Mạnh ở: exact term, mã lỗi, tên riêng (ví dụ: "ERR-403", "P1", "refund")
     Hay hụt: câu hỏi paraphrase, đồng nghĩa
     """
-    # TODO Sprint 3: Implement BM25 search
-    print("[retrieve_sparse] Chưa implement — Sprint 3")
-    return []
+    import chromadb
+    from rank_bm25 import BM25Okapi
+    from index import CHROMA_DB_DIR
 
+    client = chromadb.PersistentClient(path=str(CHROMA_DB_DIR))
+    collection = client.get_collection("rag_lab")
+
+    results = collection.get(include=["documents", "metadatas"])
+    documents = results.get("documents", []) or []
+    metadatas = results.get("metadatas", []) or []
+
+    if not documents:
+        return []
+
+    def _tokenize(text: str) -> List[str]:
+        return re.findall(r"\w+", (text or "").lower(), flags=re.UNICODE)
+
+    tokenized_corpus = [_tokenize(doc) for doc in documents]
+    query_tokens = _tokenize(query)
+    if not query_tokens:
+        return []
+
+    bm25 = BM25Okapi(tokenized_corpus)
+    bm25_scores = bm25.get_scores(query_tokens).tolist()
+
+    # Chỉ giữ candidate có điểm > 0 để tránh đưa noise thuần túy vào context
+    ranked_indices = sorted(
+        range(len(bm25_scores)),
+        key=lambda i: bm25_scores[i],
+        reverse=True,
+    )
+
+    chunks: List[Dict[str, Any]] = []
+    for idx in ranked_indices:
+        raw_score = float(bm25_scores[idx])
+        if raw_score <= 0:
+            continue
+
+        chunks.append(
+            {
+                "text": documents[idx] or "",
+                "metadata": metadatas[idx] or {},
+                "score": raw_score,
+            }
+        )
+        if len(chunks) >= top_k:
+            break
+
+    return chunks
 
 # =============================================================================
 # RETRIEVAL — HYBRID (Dense + Sparse với Reciprocal Rank Fusion)
