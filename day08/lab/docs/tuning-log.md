@@ -29,16 +29,10 @@ llm_model = gpt-4o-mini
 | Completeness | 4.00/5 |
 
 **Câu hỏi yếu nhất (điểm thấp):**
-> TODO: Liệt kê 2-3 câu hỏi có điểm thấp nhất và lý do tại sao.
-> Ví dụ: "q07 (Approval Matrix) - context recall = 1/5 vì dense bỏ lỡ alias."
+> gq07 (1/1/2), gq05 (faithfulness 1/5), và nhóm câu completeness 4/5 (gq01/gq02/gq08/gq09/gq10).
 
 **Giả thuyết nguyên nhân (Error Tree):**
-- [ ] Indexing: Chunking cắt giữa điều khoản
-- [ ] Indexing: Metadata thiếu effective_date
-- [ ] Retrieval: Dense bỏ lỡ exact keyword / alias
-- [ ] Retrieval: Top-k quá ít → thiếu evidence
-- [ ] Generation: Prompt không đủ grounding
-- [ ] Generation: Context quá dài → lost in the middle
+- 2 mục Generation (Prompt không đủ grounding, Context quá dài/lost in the middle), không tick các mục retrieval/indexing vì recall đang 5.0.
 
 ---
 
@@ -75,12 +69,11 @@ use_rerank = False
 | Completeness | 4/5 | 3.90/5 | -0.1 |
 
 **Nhận xét:**
-> TODO: Variant 1 cải thiện ở câu nào? Tại sao?
-> Có câu nào kém hơn không? Tại sao?
+> cải thiện gq05 (faithfulness 1→4), không cải thiện gq07, và completeness trung bình giảm 4.20→3.90.
 
 **Kết luận:**
-> TODO: Variant 1 có tốt hơn baseline không?
-> Bằng chứng là gì? (điểm số, câu hỏi cụ thể)
+> hybrid không tốt hơn toàn diện; trade-off là faithfulness tăng (4.20→4.50) nhưng completeness giảm (-0.30).
+
 
 ---
 
