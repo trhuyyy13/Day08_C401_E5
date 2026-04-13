@@ -30,7 +30,7 @@ from rag_answer import rag_answer
 # CẤU HÌNH
 # =============================================================================
 
-TEST_QUESTIONS_PATH = Path(__file__).parent / "data" / "test_questions.json"
+TEST_QUESTIONS_PATH = Path(__file__).parent / "data" / "grading_questions.json"
 RESULTS_DIR = Path(__file__).parent / "results"
 
 # Cấu hình baseline (Sprint 2)
@@ -399,12 +399,15 @@ def run_scorecard(
         recall = score_context_recall(chunks_used, expected_sources)
         complete = score_completeness(query, answer, expected_answer)
 
+        sources = list({c.get("metadata", {}).get("source", "unknown") for c in chunks_used})
         row = {
             "id": question_id,
             "category": category,
             "query": query,
             "answer": answer,
             "expected_answer": expected_answer,
+            "sources": sources,
+            "num_chunks": len(chunks_used),
             "faithfulness": faith["score"],
             "faithfulness_notes": faith["notes"],
             "relevance": relevance["score"],
@@ -418,7 +421,9 @@ def run_scorecard(
         results.append(row)
 
         if verbose:
-            print(f"  Answer: {answer[:100]}...")
+            print(f"  Answer: {answer}")
+            print(f"  Expected: {expected_answer}")
+            print(f"  Sources: {sources}")
             print(f"  Faithful: {faith['score']} | Relevant: {relevance['score']} | "
                   f"Recall: {recall['score']} | Complete: {complete['score']}")
 
@@ -547,15 +552,100 @@ Generated: {timestamp}
         md += f"| {metric.replace('_', ' ').title()} | {avg_str} |\n"
 
     md += "\n## Per-Question Results\n\n"
-    md += "| ID | Category | Faithful | Relevant | Recall | Complete | Notes |\n"
-    md += "|----|----------|----------|----------|--------|----------|-------|\n"
+    md += "| ID | Category | Faithful | Relevant | Recall | Complete | Sources |\n"
+    md += "|----|----------|----------|----------|--------|----------|---------|\n"
 
     for r in results:
+        sources_str = ", ".join(r.get("sources", []))
         md += (f"| {r['id']} | {r['category']} | {r.get('faithfulness', 'N/A')} | "
                f"{r.get('relevance', 'N/A')} | {r.get('context_recall', 'N/A')} | "
-               f"{r.get('completeness', 'N/A')} | {r.get('faithfulness_notes', '')[:50]} |\n")
+               f"{r.get('completeness', 'N/A')} | {sources_str[:60]} |\n")
+
+    md += "\n## Q&A Details\n\n"
+    for r in results:
+        md += f"### [{r['id']}] {r['query']}\n\n"
+        md += f"**Answer:** {r['answer']}\n\n"
+        md += f"**Expected:** {r.get('expected_answer', 'N/A')}\n\n"
+        md += f"**Sources:** {', '.join(r.get('sources', []))}\n\n"
+        md += f"**Scores:** F={r.get('faithfulness', 'N/A')} | R={r.get('relevance', 'N/A')} | Rc={r.get('context_recall', 'N/A')} | C={r.get('completeness', 'N/A')}\n\n"
+        if r.get('faithfulness_notes'):
+            md += f"- Faithfulness: {r['faithfulness_notes']}\n"
+        if r.get('relevance_notes'):
+            md += f"- Relevance: {r['relevance_notes']}\n"
+        if r.get('completeness_notes'):
+            md += f"- Completeness: {r['completeness_notes']}\n"
+        md += "\n---\n\n"
 
     return md
+
+
+# =============================================================================
+# GRADING LOG GENERATOR
+# =============================================================================
+
+GRADING_QUESTIONS_PATH = Path(__file__).parent / "data" / "grading_questions.json"
+LOGS_DIR = Path(__file__).parent / "logs"
+
+
+def generate_grading_log(retrieval_mode: str = "hybrid", use_rerank: bool = False) -> None:
+    """
+    Chạy grading_questions.json qua pipeline và xuất logs/grading_run.json
+    theo format bắt buộc trong SCORING.md.
+    """
+    if not GRADING_QUESTIONS_PATH.exists():
+        print(f"Chưa có file grading_questions.json tại: {GRADING_QUESTIONS_PATH}")
+        print("File sẽ được public lúc 17:00.")
+        return
+
+    with open(GRADING_QUESTIONS_PATH, "r", encoding="utf-8") as f:
+        questions = json.load(f)
+
+    print(f"\n{'='*70}")
+    print(f"Generating grading log — {len(questions)} questions (mode={retrieval_mode})")
+    print('='*70)
+
+    log = []
+    for q in questions:
+        qid = q["id"]
+        question = q["question"]
+        print(f"\n[{qid}] {question}")
+
+        try:
+            result = rag_answer(
+                query=question,
+                retrieval_mode=retrieval_mode,
+                use_rerank=use_rerank,
+                verbose=False,
+            )
+            entry = {
+                "id": qid,
+                "question": question,
+                "answer": result["answer"],
+                "sources": result["sources"],
+                "chunks_retrieved": len(result["chunks_used"]),
+                "retrieval_mode": result["config"]["retrieval_mode"],
+                "timestamp": datetime.now().isoformat(),
+            }
+        except Exception as e:
+            entry = {
+                "id": qid,
+                "question": question,
+                "answer": f"PIPELINE_ERROR: {e}",
+                "sources": [],
+                "chunks_retrieved": 0,
+                "retrieval_mode": retrieval_mode,
+                "timestamp": datetime.now().isoformat(),
+            }
+
+        log.append(entry)
+        print(f"  Answer: {entry['answer']}")
+        print(f"  Sources: {entry['sources']}")
+
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    log_path = LOGS_DIR / "grading_run.json"
+    with open(log_path, "w", encoding="utf-8") as f:
+        json.dump(log, f, ensure_ascii=False, indent=2)
+    print(f"\nGrading log lưu tại: {log_path}")
 
 
 # =============================================================================
@@ -600,6 +690,12 @@ if __name__ == "__main__":
         scorecard_path.write_text(baseline_md, encoding="utf-8")
         print(f"\nScorecard lưu tại: {scorecard_path}")
 
+        # Save detailed JSON log
+        json_path = RESULTS_DIR / "scorecard_baseline.json"
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(baseline_results, f, ensure_ascii=False, indent=2)
+        print(f"JSON log lưu tại: {json_path}")
+
     except NotImplementedError:
         print("Pipeline chưa implement. Hoàn thành Sprint 2 trước.")
         baseline_results = []
@@ -614,6 +710,12 @@ if __name__ == "__main__":
         )
         variant_md = generate_scorecard_summary(variant_results, VARIANT_CONFIG["label"])
         (RESULTS_DIR / "scorecard_variant.md").write_text(variant_md, encoding="utf-8")
+
+        # Save detailed JSON log
+        json_path = RESULTS_DIR / "scorecard_variant.json"
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(variant_results, f, ensure_ascii=False, indent=2)
+        print(f"JSON log lưu tại: {json_path}")
     except NotImplementedError:
         print("Variant pipeline chưa implement. Hoàn thành Sprint 3 trước.")
         variant_results = []
@@ -625,6 +727,10 @@ if __name__ == "__main__":
             variant_results,
             output_csv="ab_comparison.csv"
         )
+
+    # --- Grading Log ---
+    print("\n--- Generating Grading Log ---")
+    generate_grading_log(retrieval_mode="hybrid", use_rerank=False)
 
     print("\n\nViệc cần làm Sprint 4:")
     print("  1. Hoàn thành Sprint 2 + 3 trước")
