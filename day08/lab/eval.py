@@ -19,6 +19,8 @@ A/B Rule (từ slide):
 
 import json
 import csv
+import os
+import re
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from datetime import datetime
@@ -46,15 +48,89 @@ VARIANT_CONFIG = {
     "retrieval_mode": "hybrid",   # Hoặc "dense" nếu chỉ đổi rerank
     "top_k_search": 10,
     "top_k_select": 3,
-    "use_rerank": True,           # Hoặc False nếu variant là hybrid không rerank
-    "label": "variant_hybrid_rerank",
+    "use_rerank": False,           # Hoặc False nếu variant là hybrid không rerank
+    "label": "variant_hybrid",
 }
+
+EVAL_MODE = os.getenv("EVAL_MODE", "llm").lower()  # llm | manual
+EVAL_MODEL = os.getenv("EVAL_MODEL", os.getenv("LLM_MODEL", "gpt-4o-mini"))
 
 
 # =============================================================================
 # SCORING FUNCTIONS
 # 4 metrics từ slide: Faithfulness, Answer Relevance, Context Recall, Completeness
 # =============================================================================
+
+def _format_chunks_for_judge(chunks_used: List[Dict[str, Any]], max_chars: int = 600) -> str:
+    lines = []
+    for i, c in enumerate(chunks_used, 1):
+        meta = c.get("metadata", {})
+        source = meta.get("source", "unknown")
+        section = meta.get("section", "")
+        text = (c.get("text", "") or "").strip()
+        if len(text) > max_chars:
+            text = text[:max_chars].rstrip() + "..."
+        header = f"[{i}] {source}"
+        if section:
+            header += f" | {section}"
+        lines.append(f"{header}\n{text}")
+    return "\n\n".join(lines) if lines else "(no retrieved chunks)"
+
+
+def _call_judge(prompt: str) -> Dict[str, Any]:
+    from openai import OpenAI
+
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("Thiếu OPENAI_API_KEY trong môi trường.")
+
+    client = OpenAI(api_key=api_key)
+    response = client.chat.completions.create(
+        model=EVAL_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0,
+        max_tokens=200,
+    )
+    content = response.choices[0].message.content or ""
+
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", content, flags=re.S)
+        if match:
+            return json.loads(match.group(0))
+    return {"score": None, "reason": f"Unparseable judge output: {content[:200]}"}
+
+
+def _llm_score(prompt: str) -> Dict[str, Any]:
+    try:
+        result = _call_judge(prompt)
+        score = result.get("score")
+        reason = result.get("reason") or result.get("notes") or ""
+        if isinstance(score, (int, float)):
+            score = int(round(score))
+            if score < 1:
+                score = 1
+            if score > 5:
+                score = 5
+        else:
+            score = None
+        return {"score": score, "notes": reason}
+    except Exception as exc:
+        return {"score": None, "notes": f"Judge error: {exc}"}
+
+
+def _manual_score(metric_name: str, guidance: str) -> Dict[str, Any]:
+    print(f"\nManual scoring: {metric_name}")
+    print(guidance)
+    while True:
+        raw = input("Score (1-5): ").strip()
+        if raw.isdigit() and 1 <= int(raw) <= 5:
+            score = int(raw)
+            break
+        print("Invalid score. Enter a number 1-5.")
+    notes = input("Notes (optional): ").strip()
+    return {"score": score, "notes": notes}
 
 def score_faithfulness(
     answer: str,
@@ -88,12 +164,26 @@ def score_faithfulness(
 
     Trả về dict với: score (1-5) và notes (lý do)
     """
-    # TODO Sprint 4: Implement scoring
-    # Tạm thời trả về None (yêu cầu chấm thủ công)
-    return {
-        "score": None,
-        "notes": "TODO: Chấm thủ công hoặc implement LLM-as-Judge",
-    }
+    if EVAL_MODE == "manual":
+        guidance = (
+            "Faithfulness 1-5: 5=all grounded in chunks, 1=mostly hallucinated."
+        )
+        return _manual_score("Faithfulness", guidance)
+
+    chunks_text = _format_chunks_for_judge(chunks_used)
+    prompt = f"""You are evaluating faithfulness.
+Given these retrieved chunks:
+{chunks_text}
+
+And this answer:
+{answer}
+
+Rate faithfulness on a 1-5 scale.
+5 = fully grounded in the provided context.
+1 = answer contains information not supported by the context.
+
+Output JSON only: {{"score": <int>, "reason": "<short>"}}"""
+    return _llm_score(prompt)
 
 
 def score_answer_relevance(
@@ -113,10 +203,22 @@ def score_answer_relevance(
 
     TODO Sprint 4: Implement tương tự score_faithfulness
     """
-    return {
-        "score": None,
-        "notes": "TODO: Implement score_answer_relevance",
-    }
+    if EVAL_MODE == "manual":
+        guidance = (
+            "Answer Relevance 1-5: 5=directly answers the question, 1=off-topic."
+        )
+        return _manual_score("Answer Relevance", guidance)
+
+    prompt = f"""You are evaluating answer relevance.
+Question: {query}
+Answer: {answer}
+
+Rate relevance on a 1-5 scale.
+5 = directly answers the question.
+1 = does not answer the question.
+
+Output JSON only: {{"score": <int>, "reason": "<short>"}}"""
+    return _llm_score(prompt)
 
 
 def score_context_recall(
@@ -198,10 +300,26 @@ def score_completeness(
          Rate completeness 1-5. Are all key points covered?
          Output: {'score': int, 'missing_points': [str]}"
     """
-    return {
-        "score": None,
-        "notes": "TODO: Implement score_completeness (so sánh với expected_answer)",
-    }
+    if not expected_answer:
+        return {"score": None, "notes": "No expected answer"}
+
+    if EVAL_MODE == "manual":
+        guidance = (
+            "Completeness 1-5: 5=covers all key points in expected answer, 1=misses most."
+        )
+        return _manual_score("Completeness", guidance)
+
+    prompt = f"""You are evaluating completeness against the expected answer.
+Question: {query}
+Expected answer: {expected_answer}
+Model answer: {answer}
+
+Rate completeness on a 1-5 scale.
+5 = covers all key points in the expected answer.
+1 = misses most key points.
+
+Output JSON only: {{"score": <int>, "reason": "<short>"}}"""
+    return _llm_score(prompt)
 
 
 # =============================================================================
@@ -487,24 +605,26 @@ if __name__ == "__main__":
         baseline_results = []
 
     # --- Chạy Variant (sau khi Sprint 3 hoàn thành) ---
-    # TODO Sprint 4: Uncomment sau khi implement variant trong rag_answer.py
-    # print("\n--- Chạy Variant ---")
-    # variant_results = run_scorecard(
-    #     config=VARIANT_CONFIG,
-    #     test_questions=test_questions,
-    #     verbose=True,
-    # )
-    # variant_md = generate_scorecard_summary(variant_results, VARIANT_CONFIG["label"])
-    # (RESULTS_DIR / "scorecard_variant.md").write_text(variant_md, encoding="utf-8")
+    print("\n--- Chạy Variant ---")
+    try:
+        variant_results = run_scorecard(
+            config=VARIANT_CONFIG,
+            test_questions=test_questions,
+            verbose=True,
+        )
+        variant_md = generate_scorecard_summary(variant_results, VARIANT_CONFIG["label"])
+        (RESULTS_DIR / "scorecard_variant.md").write_text(variant_md, encoding="utf-8")
+    except NotImplementedError:
+        print("Variant pipeline chưa implement. Hoàn thành Sprint 3 trước.")
+        variant_results = []
 
     # --- A/B Comparison ---
-    # TODO Sprint 4: Uncomment sau khi có cả baseline và variant
-    # if baseline_results and variant_results:
-    #     compare_ab(
-    #         baseline_results,
-    #         variant_results,
-    #         output_csv="ab_comparison.csv"
-    #     )
+    if baseline_results and variant_results:
+        compare_ab(
+            baseline_results,
+            variant_results,
+            output_csv="ab_comparison.csv"
+        )
 
     print("\n\nViệc cần làm Sprint 4:")
     print("  1. Hoàn thành Sprint 2 + 3 trước")
