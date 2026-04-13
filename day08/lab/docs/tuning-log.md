@@ -52,7 +52,7 @@ llm_model = gpt-4o-mini
 
 **Config thay đổi:**
 ```
-retrieval_mode = "hybrid"   # hoặc biến khác
+retrieval_mode = "hybrid"   
 top_k_search = 10
 top_k_select = 3
 use_rerank = False
