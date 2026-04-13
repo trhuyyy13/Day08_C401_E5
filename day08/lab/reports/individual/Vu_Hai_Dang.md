@@ -9,7 +9,7 @@
 
 ## 1. Tôi đã làm gì trong lab này? (100-150 từ)
 
-Trong Sprint 1 của Lab Day 08, tôi đảm nhận vai trò tối ưu hóa toàn bộ quá trình Embedding & Indexing cho hệ thống RAG, đồng thời rà soát và nâng cấp module tiền xử lý (preprocess) và chia nhỏ tài liệu (chunking) mà Tuấn (thành viên trong nhóm) đã làm trước đó. 
+Trong Sprint 1 của Lab Day 08, tôi đảm nhận quá trình Embedding & Indexing cho hệ thống RAG, đồng thời rà soát và nâng cấp module tiền xử lý (preprocess) và chia nhỏ tài liệu (chunking) mà Tuấn (thành viên trong nhóm) đã làm trước đó. 
 
 Cụ thể, đối với mã nguồn gốc của Tuấn:
 - **Tiền xử lý & Chunking:** Code cũ gặp lỗi cắt câu không tự nhiên do chỉ dựa vào số lượng ký tự cứng. Tôi đã nâng cấp logic bằng cách ưu tiên cắt theo cấu trúc ngữ nghĩa (đoạn văn, tách thêm thành từng vế có vạch ngăn câu `.`) trước khi áp dụng giới hạn kích thước, giúp tránh trường hợp bị đứt câu hoặc mất ý.
