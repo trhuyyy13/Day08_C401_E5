@@ -7,25 +7,26 @@
 
 ## Baseline (Sprint 2)
 
-**Ngày:** ___________  
+**Ngày:** 2026-04-13  
 **Config:**
 ```
 retrieval_mode = "dense"
-chunk_size = _____ tokens
-overlap = _____ tokens
+chunk_size = 400 tokens
+overlap = 80 tokens
 top_k_search = 10
 top_k_select = 3
 use_rerank = False
-llm_model = _____
+llm_model = gpt-4o-mini
 ```
 
 **Scorecard Baseline:**
+
 | Metric | Average Score |
 |--------|--------------|
-| Faithfulness | ? /5 |
-| Answer Relevance | ? /5 |
-| Context Recall | ? /5 |
-| Completeness | ? /5 |
+| Faithfulness | 4.20/5 |
+| Relevance | 4.60/5 |
+| Context Recall | 5.00/5 |
+| Completeness | 4.00/5 |
 
 **Câu hỏi yếu nhất (điểm thấp):**
 > TODO: Liệt kê 2-3 câu hỏi có điểm thấp nhất và lý do tại sao.
@@ -65,12 +66,13 @@ use_rerank = False
 ```
 
 **Scorecard Variant 1:**
+
 | Metric | Baseline | Variant 1 | Delta |
 |--------|----------|-----------|-------|
-| Faithfulness | ?/5 | ?/5 | +/- |
-| Answer Relevance | ?/5 | ?/5 | +/- |
-| Context Recall | ?/5 | ?/5 | +/- |
-| Completeness | ?/5 | ?/5 | +/- |
+| Faithfulness | 4.20/5 | 4.60/5 | +0.40 |
+| Answer Relevance | 4.60/5 | 4.60/5 | N/A |
+| Context Recall | 5/5 | 5/5 | N/A |
+| Completeness | 4/5 | 3.90/5 | -0.1 |
 
 **Nhận xét:**
 > TODO: Variant 1 cải thiện ở câu nào? Tại sao?
@@ -82,33 +84,15 @@ use_rerank = False
 
 ---
 
-## Variant 2 (nếu có thời gian)
-
-**Biến thay đổi:** ___________  
-**Config:**
-```
-# TODO
-```
-
-**Scorecard Variant 2:**
-| Metric | Baseline | Variant 1 | Variant 2 | Best |
-|--------|----------|-----------|-----------|------|
-| Faithfulness | ? | ? | ? | ? |
-| Answer Relevance | ? | ? | ? | ? |
-| Context Recall | ? | ? | ? | ? |
-| Completeness | ? | ? | ? | ? |
-
----
-
 ## Tóm tắt học được
 
 > TODO (Sprint 4): Điền sau khi hoàn thành evaluation.
 
-1. **Lỗi phổ biến nhất trong pipeline này là gì?**
-   > _____________
+1. **Lỗi phổ biến nhất trong pipeline này là gì?**  
+   > Lỗi phổ biến nhất là xử lý câu hỏi thiếu/ngầm định context chưa ổn định: model thường trả "Không đủ dữ liệu" quá ngắn nên bị trừ relevance/completeness ở các câu cần vừa abstain vừa nêu hướng xử lý.
 
-2. **Biến nào có tác động lớn nhất tới chất lượng?**
-   > _____________
+2. **Biến nào có tác động lớn nhất tới chất lượng?**  
+   > Biến có tác động lớn nhất là `retrieval_mode` (dense -> hybrid). Trong run gần nhất, hybrid cải thiện faithfulness (4.20 -> 4.50) và giữ context recall cao, nhưng completeness giảm nhẹ (4.20 -> 3.90), cho thấy retrieval ảnh hưởng trực tiếp chất lượng context đầu vào.
 
-3. **Nếu có thêm 1 giờ, nhóm sẽ thử gì tiếp theo?**
-   > _____________
+3. **Nếu có thêm 1 giờ, nhóm sẽ thử gì tiếp theo?**  
+   > Nhóm sẽ thử hybrid có điều kiện theo loại query (keyword/error code thì hybrid, policy thường thì dense), đồng thời tinh chỉnh prompt abstain để khi không đủ dữ liệu vẫn trả lời đầy đủ và rõ hướng xử lý.
