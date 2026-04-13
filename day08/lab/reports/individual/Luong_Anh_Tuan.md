@@ -1,8 +1,11 @@
 # Báo Cáo Cá Nhân — Lab Day 08: RAG Pipeline
 
 **Họ và tên:** Lương Anh Tuấn
+
 **Vai trò trong nhóm:** Sprint 1 Owner, Sprint 4 Experimenter
+
 **Ngày nộp:** 13/04/2026
+
 **Độ dài yêu cầu:** 500–800 từ
 
 Team chúng em chia thành 3 cặp (Tuấn+ Đăng, Huy + Sơn, Đạt + Dũng, Huy + Sơn). Mỗi cặp đảm nhận 1 sprint, trong đó tôi và Đăng tập trung vào Sprint 1 (Indexing), Huy + Sơn làm Sprint 2 (Retrieval), Đạt + Dũng đảm nhận Sprint 3 (Evaluation). Sprint 4 cả nhóm cùng làm việc và chạy thực nghiệm để tìm ra config tốt nhất.
