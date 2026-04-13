@@ -12,7 +12,7 @@
 |Trần Ngọc Sơn |  trngson.work@gmail.com |
 
 **Ngày nộp:** 2026-04-13  
-**Repo:** 
+**Repo:** https://github.com/trhuyyy13/Day08_C401_E5.git
 **Độ dài khuyến nghị:** 600–900 từ
 
 
